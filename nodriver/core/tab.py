@@ -173,6 +173,10 @@ class Tab(Connection):
         self._window_id = None
 
     @property
+    def url(self):
+        return self.target.url
+    
+    @property
     def inspector_url(self):
         """
         get the inspector url. this url can be used in another browser to show you the devtools interface for
@@ -1504,6 +1508,128 @@ class Tab(Connection):
                 parent = parent.parent
         await checkbox.mouse_move()
         await checkbox.mouse_click()
+
+    async def get_cookies(
+        self, requests_cookie_format: bool = False
+    ) -> List[Union[cdp.network.Cookie, "http.cookiejar.Cookie"]]:
+        """
+        get all cookies
+
+        :param requests_cookie_format: when True, returns python http.cookiejar.Cookie objects, compatible  with requests library and many others.
+        :type requests_cookie_format: bool
+        :return:
+        :rtype:
+
+        """
+        cookies = await self.send(cdp.storage.get_cookies())
+        if requests_cookie_format:
+            import requests.cookies
+
+            return [
+                requests.cookies.create_cookie(
+                    name=c.name,
+                    value=c.value,
+                    domain=c.domain,
+                    path=c.path,
+                    expires=c.expires,
+                    secure=c.secure,
+                )
+                for c in cookies
+            ]
+        return cookies
+
+    async def set_cookies(self, cookies: List[cdp.network.CookieParam]):
+        existed_cookies = await self.get_cookies()
+        cookie_dict = {c.name: c for c in existed_cookies}
+        
+        included_cookies = []
+        for cookie in cookies:
+            if cookie.name in cookie_dict:
+                cookie_dict[cookie.name].value = cookie.value
+                included_cookies.append(cookie_dict[cookie.name])
+            else:
+                included_cookies.append(cookie)
+
+        await self.send(cdp.storage.set_cookies(cookies))
+
+    async def load_cookies(self, file: PathLike = ".session.dat", pattern: str = ".*"):
+        """
+        load all cookies (or a subset, controlled by `pattern`) from a file created by :py:meth:`~save_cookies`.
+
+        :param file:
+        :type file:
+        :param pattern: regex style pattern string.
+               any cookie that has a  domain, key or value field which matches the pattern will be included.
+               default = ".*"  (all)
+
+               eg: the pattern "(cf|.com|nowsecure)" will include those cookies which:
+                    - have a string "cf" (cloudflare)
+                    - have ".com" in them, in either domain, key or value field.
+                    - contain "nowsecure"
+        :type pattern: str
+        :return:
+        :rtype:
+        """
+        import re
+
+        pattern = re.compile(pattern)
+        save_path = pathlib.Path(file).resolve()
+        if not save_path.exists(): return
+
+        with save_path.open('r+b') as f:
+            cookies = pickle.load(f)
+            included_cookies = []
+            for cookie in cookies:
+                for match in pattern.finditer(str(cookie.__dict__)):
+                    included_cookies.append(cookie)
+                    logger.error(
+                        "loaded cookie for matching pattern '%s' => (%s: %s)",
+                        pattern.pattern,
+                        cookie.name,
+                        cookie.value,
+                    )
+                    break
+            await self.set_cookies(included_cookies)
+        return included_cookies
+
+    async def save_cookies(self, file: PathLike = ".session.dat", pattern: str = ".*"):
+        """
+        save all cookies (or a subset, controlled by `pattern`) to a file to be restored later
+
+        :param file:
+        :type file:
+        :param pattern: regex style pattern string.
+               any cookie that has a  domain, key or value field which matches the pattern will be included.
+               default = ".*"  (all)
+
+               eg: the pattern "(cf|.com|nowsecure)" will include those cookies which:
+                    - have a string "cf" (cloudflare)
+                    - have ".com" in them, in either domain, key or value field.
+                    - contain "nowsecure"
+        :type pattern: str
+        :return:
+        :rtype:
+        """
+        import re
+
+        pattern = re.compile(pattern)
+        save_path = pathlib.Path(file).resolve()
+
+        cookies = await self.get_cookies()
+
+        included_cookies = []
+        for cookie in cookies:
+            for match in pattern.finditer(str(cookie.__dict__)):
+                logger.error(
+                    "saved cookie for matching pattern '%s' => (%s: %s)",
+                    pattern.pattern,
+                    cookie.name,
+                    cookie.value,
+                )
+                included_cookies.append(cookie)
+        with save_path.open('w+b') as f:
+            pickle.dump(included_cookies, f)
+        return included_cookies
 
     async def get_cookies(
         self, requests_cookie_format: bool = False
