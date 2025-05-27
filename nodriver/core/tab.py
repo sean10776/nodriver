@@ -1627,6 +1627,7 @@ class Tab(Connection):
                     cookie.value,
                 )
                 included_cookies.append(cookie)
+                break
         with save_path.open('w+b') as f:
             pickle.dump(included_cookies, f)
         return included_cookies
